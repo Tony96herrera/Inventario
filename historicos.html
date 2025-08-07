@@ -369,7 +369,7 @@ input:checked + .slider:before {
         <button class="close-btn" onclick="cerrarMenuLateral()" title="Cerrar menú">&times;</button>
         <div class="menu-title">Menú</div>
         <ul>
-            <li><a href="Inventario Diario.html" onclick="cerrarMenuLateral()">Inventario Diario</a></li>
+            <li><a href="index.html" onclick="cerrarMenuLateral()">Inventario Diario</a></li>
             <!-- <li><a href="historicos.html" onclick="cerrarMenuLateral()">Históricos</a></li> -->
             <li><a href="Inventario%20General.html" onclick="cerrarMenuLateral()">Inventario General</a></li>
         </ul>
@@ -607,6 +607,7 @@ input:checked + .slider:before {
                 infoDivFecha.innerHTML += `
                     <button id="btnEditarFecha" style="margin-left:18px;padding:7px 18px;border-radius:7px;background:#fbbf24;color:#fff;font-weight:700;border:none;cursor:pointer;">✏️ Editar Registro</button>
                     <button id="btnGuardarFecha" style="margin-left:10px;padding:7px 18px;border-radius:7px;background:#22c55e;color:#fff;font-weight:700;border:none;cursor:pointer;display:none;">💾 Guardar Cambios</button>
+                    <button id="btnImportarSAP" style="margin-left:10px;padding:7px 18px;border-radius:7px;background:#6366f1;color:#fff;font-weight:700;border:none;cursor:pointer;display:none;">📤 Importar SAP</button>
                 `;
                 if (data.data.length === 0) {
                     tablaBodyFecha.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#ef4444;">No hay productos en este histórico.</td></tr>`;
@@ -647,21 +648,28 @@ input:checked + .slider:before {
                 showLoading(false);
             }
             setTimeout(() => {
-        const btnEditar = document.getElementById('btnEditarFecha');
-        const btnGuardar = document.getElementById('btnGuardarFecha');
-        if (btnEditar) {
-            btnEditar.onclick = function() {
-                habilitarEdicionInventarioDiario();
-                btnEditar.style.display = 'none';
-                btnGuardar.style.display = '';
-            };
-        }
-        if (btnGuardar) {
-            btnGuardar.onclick = function() {
-                guardarCambiosInventarioDiario();
-            };
-        }
-    }, 100);
+    const btnEditar = document.getElementById('btnEditarFecha');
+    const btnGuardar = document.getElementById('btnGuardarFecha');
+    const btnImportarSAP = document.getElementById('btnImportarSAP');
+    if (btnEditar) {
+        btnEditar.onclick = function() {
+            habilitarEdicionInventarioDiario();
+            btnEditar.style.display = 'none';
+            btnGuardar.style.display = '';
+            if (btnImportarSAP) btnImportarSAP.style.display = '';
+        };
+    }
+    if (btnGuardar) {
+        btnGuardar.onclick = function() {
+            guardarCambiosInventarioDiario();
+        };
+    }
+    if (btnImportarSAP) {
+        btnImportarSAP.onclick = function() {
+            mostrarDialogoImportarSAP();
+        };
+    }
+}, 100);
         }
 
         // Habilita edición en las columnas Físico, Display, Merma (convierte a input solo al editar)
@@ -1030,6 +1038,114 @@ async function guardarCambiosInventarioGeneral() {
                 }
             }, 100);
         }
+
+        // Agrega input file oculto para importar SAP
+(function() {
+    if (!document.getElementById('inputImportarSAP')) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.xlsx,.xls';
+        input.style.display = 'none';
+        input.id = 'inputImportarSAP';
+        document.body.appendChild(input);
+    }
+})();
+
+// Mostrar diálogo para importar SAP
+function mostrarDialogoImportarSAP() {
+    const input = document.getElementById('inputImportarSAP');
+    input.value = '';
+    input.onchange = function(e) {
+        if (e.target.files && e.target.files[0]) {
+            importarSAPDesdeExcel(e.target.files[0]);
+        }
+    };
+    input.click();
+}
+
+// Importa SAP desde Excel y actualiza los registros por Material
+async function importarSAPDesdeExcel(file) {
+    showLoading(true);
+    try {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            // Toma la primera hoja
+            const sheetName = workbook.SheetNames[0];
+            const ws = workbook.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
+            // Construye un mapa Material -> SAP
+            const sapMap = {};
+            rows.forEach(row => {
+                const material = row['Material'] || row['material'];
+                const sap = row['SAP'] || row['sap'];
+                if (material !== undefined && sap !== undefined) {
+                    sapMap[String(material).trim()] = sap;
+                }
+            });
+            // Actualiza los registros en historicoActualFecha
+            let cambios = 0;
+            if (historicoActualFecha && Array.isArray(historicoActualFecha.data)) {
+                historicoActualFecha.data.forEach(item => {
+                    // Normaliza ambos a string y sin espacios
+                    const materialRegistro = String(item['Material'] || item['material'] || '').trim();
+                    // Busca SAP en el mapa usando el valor normalizado
+                    if (materialRegistro && sapMap.hasOwnProperty(materialRegistro)) {
+                        item['SAP'] = sapMap[materialRegistro];
+                        cambios++;
+                    }
+                });
+                // Actualiza la tabla HTML inmediatamente
+                const filas = document.querySelectorAll('#tablaHistBodyFecha tr');
+                filas.forEach((tr, idx) => {
+                    const item = historicoActualFecha.data[idx];
+                    const tdSAP = tr.querySelector('td:nth-child(3)');
+                    // Forzar el valor SAP como string para evitar problemas de tipo
+                    if (tdSAP && item) {
+                        tdSAP.textContent = String(item['SAP'] ?? item['sap'] ?? '');
+                    }
+                    // Recalcula diferencia si está en modo edición
+                    const inputFisico = tr.querySelector('.input-fisico');
+                    const inputDisplay = tr.querySelector('.input-display');
+                    const inputMerma = tr.querySelector('.input-merma');
+                    const tdDiferencia = tr.querySelector('td:last-child');
+                    let sapValue = parseFloat(tdSAP.textContent) || 0;
+                    let fisico = inputFisico ? parseFloat(inputFisico.value) || 0 : parseFloat(item['Físico'] || item['fisico']) || 0;
+                    let display = inputDisplay ? parseFloat(inputDisplay.value) || 0 : parseFloat(item['Display'] || item['display']) || 0;
+                    let merma = inputMerma ? parseFloat(inputMerma.value) || 0 : parseFloat(item['Merma'] || item['merma']) || 0;
+                    let diferencia = fisico + display + merma - sapValue;
+                    if (tdDiferencia) tdDiferencia.textContent = isNaN(diferencia) ? '' : diferencia;
+                });
+            }
+            if (cambios > 0) {
+                // Guarda en Firestore
+                const fechaKey = historicoActualFecha.fecha;
+                db.collection("inventario_diario").doc(fechaKey).update({
+                    data: historicoActualFecha.data
+                }).then(() => {
+                    alert(`SAP actualizado para ${cambios} productos.`);
+                    // buscarHistoricoFecha(); // Ya se refleja en la tabla, no es necesario recargar
+                }).catch(e => {
+                    alert('Error al guardar SAP: ' + e.message);
+                }).finally(() => {
+                    showLoading(false);
+                });
+            } else {
+                alert('No se encontraron coincidencias de Material para actualizar SAP.');
+                showLoading(false);
+            }
+        };
+        reader.onerror = function() {
+            alert('Error al leer el archivo.');
+            showLoading(false);
+        };
+        reader.readAsArrayBuffer(file);
+    } catch (e) {
+        alert('Error al importar SAP: ' + e.message);
+        showLoading(false);
+    }
+}
 
         // Asignar eventos a los botones
         btnBuscarFecha.addEventListener('click', buscarHistoricoFecha);
