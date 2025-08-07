@@ -848,6 +848,9 @@
                 const headers = jsonData[0].map(h => h ? h.toString().trim() : "").filter(h => h !== "");
                 columnNames = headers;
 
+                // Detectar índice de columna DIFERENCIA (case-insensitive)
+                const diferenciaIdx = jsonData[0].findIndex(h => h && h.toString().trim().toUpperCase() === "DIFERENCIA");
+
                 // Convertir datos a formato objeto solo con columnas válidas
                 excelData = [];
                 for (let i = 1; i < jsonData.length; i++) {
@@ -855,7 +858,12 @@
                     headers.forEach((col, index) => {
                         // Buscar el índice real en la fila original
                         const headerIndex = jsonData[0].findIndex(h => h && h.toString().trim() === col);
-                        row[col] = jsonData[i][headerIndex] || "";
+                        // Si es DIFERENCIA, SIEMPRE dejar en blanco para que se calcule después
+                        if (col.trim().toUpperCase() === "DIFERENCIA") {
+                            row[col] = ""; // FORZAR vacío para que se calcule
+                        } else {
+                            row[col] = jsonData[i][headerIndex] || "";
+                        }
                     });
                     // Solo agregar filas si tienen algún dato relevante
                     if (Object.values(row).some(val => val !== "")) {
@@ -1427,15 +1435,15 @@ Criterios disponibles: ${columnNames.join(', ')}`);
         function renderizarTabla(filtro = '', columna = '') {
             const thead = document.getElementById('tableHead');
             const tbody = document.getElementById('tableBody');
-            
+
             thead.innerHTML = '';
             tbody.innerHTML = '';
-            
+
             if (excelData.length === 0 || columnNames.length === 0) {
                 console.log('No hay datos o columnas para mostrar');
                 return;
             }
-            
+
             // Crear headers con estilos mejorados
             const headerRow = document.createElement('tr');
             columnNames.forEach(columnName => {
@@ -1445,17 +1453,17 @@ Criterios disponibles: ${columnNames.join(', ')}`);
                 headerRow.appendChild(th);
             });
             thead.appendChild(headerRow);
-            
+
             // Buscar columna CENTRO para filtrado
             const centroColumn = columnNames.find(col => 
                 col.toUpperCase().includes('CENTRO') || 
                 col.toLowerCase().includes('centro') ||
                 col === 'CENTRO'
             );
-            
+
             // Filtrar datos - EXCLUIR filas donde CENTRO esté vacío (si existe la columna)
             let dataToShow = [...excelData];
-            
+
             if (centroColumn) {
                 dataToShow = excelData.filter(row => {
                     const centroValue = row[centroColumn];
@@ -1463,7 +1471,7 @@ Criterios disponibles: ${columnNames.join(', ')}`);
                 });
                 console.log(`Filtrados por ${centroColumn}: ${dataToShow.length} registros`);
             }
-            
+
             // Aplicar filtros adicionales de búsqueda
             if (filtro || columna) {
                 dataToShow = dataToShow.filter(row => {
@@ -1479,36 +1487,129 @@ Criterios disponibles: ${columnNames.join(', ')}`);
                     return true;
                 });
             }
-            
+
             // Limitar a 500 filas para mejor rendimiento
             const maxRows = 500;
             const rowsToShow = dataToShow.slice(0, maxRows);
-            
-            // Crear filas
+
+            // Detectar nombres exactos de columnas
+            const realCol = columnNames.find(col => col.trim().toUpperCase() === 'REAL');
+            const sapCol = columnNames.find(col => col.trim().toUpperCase() === 'SAP');
+            const diferenciaCol = columnNames.find(col => col.trim().toUpperCase() === 'DIFERENCIA');
+
             rowsToShow.forEach((row, rowIndex) => {
                 const tr = document.createElement('tr');
                 columnNames.forEach((columnName, colIdx) => {
                     const td = document.createElement('td');
                     const valorCelda = row[columnName] || '';
-                    
-                    // Si la columna es "REAL", siempre muestra un input editable visible
+
+                    // REAL: input editable
                     if (columnName.trim().toUpperCase() === 'REAL') {
                         const input = document.createElement('input');
                         input.type = 'number';
                         input.className = 'editable-cell';
                         input.value = valorCelda;
                         input.step = 'any';
-                        input.addEventListener('change', function() {
-                            row[columnName] = this.value;
+                        
+                        // Función para calcular y actualizar DIFERENCIA
+                        const actualizarDiferencia = () => {
+                            const realVal = parseFloat(input.value) || 0;
+                            const sapVal = parseFloat(row[sapCol]) || 0;
+                            const diferencia = realVal - sapVal;
+                            
+                            console.log(`Calculando DIFERENCIA: REAL=${realVal} - SAP=${sapVal} = ${diferencia}`);
+                            
+                            // Actualizar en el objeto row actual
+                            row[columnName] = input.value;
+                            if (diferenciaCol) {
+                                row[diferenciaCol] = diferencia;
+                            }
+                            
+                            // Encontrar y actualizar en excelData usando un identificador único
+                            const material = row[columnNames.find(col => col.toUpperCase().includes('MATERIAL'))] || '';
+                            const lote = row[columnNames.find(col => col.toUpperCase().includes('LOTE'))] || '';
+                            const centro = row[centroColumn] || '';
+                            
+                            const originalIndex = excelData.findIndex(originalRow => {
+                                const originalMaterial = originalRow[columnNames.find(col => col.toUpperCase().includes('MATERIAL'))] || '';
+                                const originalLote = originalRow[columnNames.find(col => col.toUpperCase().includes('LOTE'))] || '';
+                                const originalCentro = originalRow[centroColumn] || '';
+                                
+                                return originalMaterial === material && originalLote === lote && originalCentro === centro;
+                            });
+                            
+                            if (originalIndex !== -1) {
+                                excelData[originalIndex][columnName] = input.value;
+                                if (diferenciaCol) {
+                                    excelData[originalIndex][diferenciaCol] = diferencia;
+                                }
+                                console.log(`Actualizado en excelData[${originalIndex}]: REAL=${input.value}, DIFERENCIA=${diferencia}`);
+                            }
+                            
                             guardarDatosLocalmente();
-                        });
-                        input.addEventListener('blur', function() {
-                            row[columnName] = this.value;
-                            guardarDatosLocalmente();
-                        });
+                            
+                            // Actualizar la celda DIFERENCIA en la misma fila - CORREGIDO
+                            const diferenciaCell = tr.querySelector(`td:nth-child(${columnNames.indexOf(diferenciaCol) + 1})`);
+                            if (diferenciaCell && diferenciaCol) {
+                                diferenciaCell.textContent = diferencia;
+                                diferenciaCell.title = `DIFERENCIA: REAL (${realVal}) - SAP (${sapVal}) = ${diferencia}`;
+                                
+                                // Aplicar colores
+                                if (diferencia > 0) {
+                                    diferenciaCell.style.color = '#059669'; // Verde para positivo
+                                    diferenciaCell.style.fontWeight = '600';
+                                } else if (diferencia < 0) {
+                                    diferenciaCell.style.color = '#dc2626'; // Rojo para negativo  
+                                    diferenciaCell.style.fontWeight = '600';
+                                } else {
+                                    diferenciaCell.style.color = '#6b7280'; // Gris para cero
+                                    diferenciaCell.style.fontWeight = '400';
+                                }
+                            }
+                        };
+                        
+                        input.addEventListener('input', actualizarDiferencia);
+                        input.addEventListener('change', actualizarDiferencia);
+                        input.addEventListener('blur', actualizarDiferencia);
+                        
                         td.appendChild(input);
-                    } else {
-                        // Para las demás columnas, solo mostrar el valor, sin edición ni doble clic
+                    }
+                    // DIFERENCIA: mostrar el valor calculado - CORREGIDO
+                    else if (columnName.trim().toUpperCase() === 'DIFERENCIA') {
+                        // SIEMPRE calcular la diferencia en tiempo real, ignorar valor del Excel
+                        let realRaw = row[realCol];
+                        let sapRaw = row[sapCol];
+                        
+                        // Si REAL está vacío, usar 0. Si SAP está vacío, usar 0
+                        let realVal = (realRaw !== undefined && realRaw !== null && realRaw !== "") ? parseFloat(realRaw) : 0;
+                        let sapVal = (sapRaw !== undefined && sapRaw !== null && sapRaw !== "") ? parseFloat(sapRaw) : 0;
+                        
+                        // FORZAR el cálculo: REAL - SAP
+                        let diferencia = realVal - sapVal;
+                        
+                        console.log(`FORZANDO cálculo DIFERENCIA: REAL=${realVal} - SAP=${sapVal} = ${diferencia}`);
+                        
+                        // Actualizar el valor en el objeto row para que se guarde (SOBRESCRIBIR cualquier valor del Excel)
+                        row[diferenciaCol] = diferencia;
+                        
+                        // Mostrar el valor calculado
+                        td.textContent = diferencia;
+                        td.title = `DIFERENCIA CALCULADA: REAL (${realVal}) - SAP (${sapVal}) = ${diferencia}`;
+                        
+                        // Colorear según el valor
+                        if (diferencia > 0) {
+                            td.style.color = '#059669'; // Verde para positivo
+                            td.style.fontWeight = '600';
+                        } else if (diferencia < 0) {
+                            td.style.color = '#dc2626'; // Rojo para negativo  
+                            td.style.fontWeight = '600';
+                        } else {
+                            td.style.color = '#6b7280'; // Gris para cero
+                            td.style.fontWeight = '400';
+                        }
+                    }
+                    // Otros: solo mostrar valor
+                    else {
                         td.textContent = valorCelda;
                         td.title = `${columnName}: ${valorCelda}`;
                     }
@@ -1516,7 +1617,7 @@ Criterios disponibles: ${columnNames.join(', ')}`);
                 });
                 tbody.appendChild(tr);
             });
-            
+
             // Mostrar información de registros
             if (dataToShow.length > maxRows) {
                 const infoRow = document.createElement('tr');
@@ -1527,10 +1628,7 @@ Criterios disponibles: ${columnNames.join(', ')}`);
                 infoRow.appendChild(infoCell);
                 tbody.appendChild(infoRow);
             }
-            
-            console.log(`Tabla renderizada: ${rowsToShow.length} filas, ${columnNames.length} columnas`);
-            
-            // Guardar datos en localStorage
+
             guardarDatosLocalmente();
         }
         
@@ -1721,148 +1819,6 @@ Criterios disponibles: ${columnNames.join(', ')}`);
             }
         }
         
-        // Modifica actualizarInterfaz y renderizarTabla para guardar después de cada cambio
-        function actualizarInterfaz() {
-            // Actualizar zona de upload
-            const uploadIcon = document.getElementById('uploadIcon');
-            const uploadText = document.getElementById('uploadText');
-            const uploadSubtext = document.getElementById('uploadSubtext');
-            const uploadZone = document.getElementById('uploadZone');
-            
-            uploadIcon.textContent = '✅';
-            uploadText.textContent = `Archivo cargado: ${fileName}`;
-            uploadSubtext.textContent = `${excelData.length} filas, ${columnNames.length} columnas extraídas`;
-            uploadZone.classList.add('has-file');
-            
-            // Habilitar controles
-            document.getElementById('analyzeBtn').disabled = false;
-            document.getElementById('exportBtn').disabled = false;
-            document.getElementById('saveBtn').disabled = false;
-            document.getElementById('clearBtn').disabled = false;
-            
-            // Mostrar datos básicos
-            renderizarTabla();
-            actualizarFiltroColumnas();
-            
-            // Mostrar secciones
-            document.getElementById('searchContainer').classList.add('show');
-            document.getElementById('tableContainer').classList.add('show');
-            document.getElementById('emptyState').style.display = 'none';
-            
-            // Guardar datos en localStorage
-            guardarDatosLocalmente();
-        }
-        
-        function renderizarTabla(filtro = '', columna = '') {
-            const thead = document.getElementById('tableHead');
-            const tbody = document.getElementById('tableBody');
-            
-            thead.innerHTML = '';
-            tbody.innerHTML = '';
-            
-            if (excelData.length === 0 || columnNames.length === 0) {
-                console.log('No hay datos o columnas para mostrar');
-                return;
-            }
-            
-            // Crear headers con estilos mejorados
-            const headerRow = document.createElement('tr');
-            columnNames.forEach(columnName => {
-                const th = document.createElement('th');
-                th.textContent = columnName;
-                th.title = `Columna: ${columnName}`;
-                headerRow.appendChild(th);
-            });
-            thead.appendChild(headerRow);
-            
-            // Buscar columna CENTRO para filtrado
-            const centroColumn = columnNames.find(col => 
-                col.toUpperCase().includes('CENTRO') || 
-                col.toLowerCase().includes('centro') ||
-                col === 'CENTRO'
-            );
-            
-            // Filtrar datos - EXCLUIR filas donde CENTRO esté vacío (si existe la columna)
-            let dataToShow = [...excelData];
-            
-            if (centroColumn) {
-                dataToShow = excelData.filter(row => {
-                    const centroValue = row[centroColumn];
-                    return centroValue && centroValue.toString().trim() !== '' && centroValue.toString().trim() !== '0';
-                });
-                console.log(`Filtrados por ${centroColumn}: ${dataToShow.length} registros`);
-            }
-            
-            // Aplicar filtros adicionales de búsqueda
-            if (filtro || columna) {
-                dataToShow = dataToShow.filter(row => {
-                    if (columna && filtro) {
-                        const value = row[columna];
-                        return value && value.toString().toLowerCase().includes(filtro);
-                    } else if (filtro) {
-                        return columnNames.some(col => {
-                            const value = row[col];
-                            return value && value.toString().toLowerCase().includes(filtro);
-                        });
-                    }
-                    return true;
-                });
-            }
-            
-            // Limitar a 500 filas para mejor rendimiento
-            const maxRows = 500;
-            const rowsToShow = dataToShow.slice(0, maxRows);
-            
-            // Crear filas
-            rowsToShow.forEach((row, rowIndex) => {
-                const tr = document.createElement('tr');
-                columnNames.forEach((columnName, colIdx) => {
-                    const td = document.createElement('td');
-                    const valorCelda = row[columnName] || '';
-                    
-                    // Si la columna es "REAL", siempre muestra un input editable visible
-                    if (columnName.trim().toUpperCase() === 'REAL') {
-                        const input = document.createElement('input');
-                        input.type = 'number';
-                        input.className = 'editable-cell';
-                        input.value = valorCelda;
-                        input.step = 'any';
-                        input.addEventListener('change', function() {
-                            row[columnName] = this.value;
-                            guardarDatosLocalmente();
-                        });
-                        input.addEventListener('blur', function() {
-                            row[columnName] = this.value;
-                            guardarDatosLocalmente();
-                        });
-                        td.appendChild(input);
-                    } else {
-                        // Para las demás columnas, solo mostrar el valor, sin edición ni doble clic
-                        td.textContent = valorCelda;
-                        td.title = `${columnName}: ${valorCelda}`;
-                    }
-                    tr.appendChild(td);
-                });
-                tbody.appendChild(tr);
-            });
-            
-            // Mostrar información de registros
-            if (dataToShow.length > maxRows) {
-                const infoRow = document.createElement('tr');
-                const infoCell = document.createElement('td');
-                infoCell.colSpan = columnNames.length;
-                infoCell.style.cssText = 'text-align: center; padding: 20px; background: #f0f9ff; color: #0369a1; font-weight: 600;';
-                infoCell.textContent = `Mostrando ${maxRows} de ${dataToShow.length} registros. Use los filtros para refinar la búsqueda.`;
-                infoRow.appendChild(infoCell);
-                tbody.appendChild(infoRow);
-            }
-            
-            console.log(`Tabla renderizada: ${rowsToShow.length} filas, ${columnNames.length} columnas`);
-            
-            // Guardar datos en localStorage
-            guardarDatosLocalmente();
-        }
-        
         // Función para mostrar/ocultar loading
         function showLoading(show) {
             document.getElementById('loading').classList.toggle('show', !!show);
@@ -1875,4 +1831,5 @@ Criterios disponibles: ${columnNames.join(', ')}`);
         };
     </script>
 </body>
+</html>
 </html>
